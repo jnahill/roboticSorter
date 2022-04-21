@@ -1,10 +1,15 @@
-from typing import Tuple, List, Optional, Dict
-import time
+from typing import Tuple, List, Optional, Dict, Callable
 import glob
+import argparse
+import torch
+import torch.nn as nn
 import numpy as np
 import pybullet as pb
 import pybullet_data
-import random
+import gym
+import time
+from tqdm import tqdm
+import h5py
 
 class RobotArm:
     GRIPPER_CLOSED = 0.
@@ -343,6 +348,7 @@ class TopDownGraspingEnv(gym.Env):
         self.robot = RobotArm()
 
         # add object
+        self.object_id = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
         self.object_id1 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
         self.object_id2 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
         self.object_id3 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
@@ -494,7 +500,31 @@ class TopDownGraspingEnv(gym.Env):
 
         return x, y, theta
 
-    def reset_object_position(self, object) -> None:
+    def reset_object_position(self) -> None:
+        '''Places object randomly in workspace.  The x,y position should be
+        within the workspace, and the rotation performed only about z-axis.
+        The height of the object should be set such that it sits on the plane
+        '''
+        ws_padding = 0.01
+        x,y = np.random.uniform(self.workspace[0]+ws_padding,
+                                self.workspace[1]-ws_padding)
+        theta = np.random.uniform(-np.pi/2, np.pi/2)
+
+        pos = np.array((x,y,self.object_width/2))
+        quat = pb.getQuaternionFromEuler((np.random.randint(2)*np.pi,0, theta))
+        pb.resetBasePositionAndOrientation(self.object_id, pos, quat)
+
+    def reset_object_texture(self) -> None:
+        '''Randomly assigns a texture to the object.  Available textures are
+        located within the `assets/textures` folder.
+        '''
+        tex_id = self.tex_ids[np.random.randint(len(self.tex_ids))]
+        r,g,b = np.random.uniform(0.5, 1, size=3)**0.8
+        pb.changeVisualShape(self.object_id, -1, -1,
+                             textureUniqueId=tex_id,
+                             rgbaColor=(r,g,b,1))
+
+    def reset_given_object_position(self, object) -> None:
         '''Places object randomly in workspace.  The x,y position should be
         within the workspace, and the rotation performed only about z-axis.
         The height of the object should be set such that it sits on the plane
@@ -508,7 +538,7 @@ class TopDownGraspingEnv(gym.Env):
         quat = pb.getQuaternionFromEuler((np.random.randint(2)*np.pi,0, theta))
         pb.resetBasePositionAndOrientation(object, pos, quat)
 
-    def reset_object_texture(self, object) -> List:
+    def reset_given_object_texture(self, object) -> List:
         '''Randomly assigns a texture to the object.  Available textures are
         located within the `nuro_arm/assets/textures` folder.
         '''
@@ -563,16 +593,16 @@ def mock_data_collection():
     env_objects = [env.object_id1, env.object_id2, env.object_id3, env.object_id4, env.object_id5]
     success = True
     for i in env_objects:
-        env.reset_object_texture(i)
-        env.reset_object_position(i)
+        env.reset_given_object_texture(i)
+        env.reset_given_object_position(i)
 
 
     while True:
         if not success:
             for j in env_objects:
-                env.reset_object_texture(j)
-                env.reset_object_position(j)
-        color = env.reset_object_texture(object)
+                env.reset_given_object_texture(j)
+                env.reset_given_object_position(j)
+        color = env.reset_given_object_texture(object)
 
         img = get_obs()
         
@@ -601,6 +631,41 @@ def mock_data_collection():
             env.move_to_bin(colorBin)
         #print("Object is " + color)
         print("SUCCESS!" if success else "failure")
+
+def collect_transitions(env: TopDownGraspingEnv,
+                        hdf5_file: str,
+                        num_steps: int=3000,
+                        policy: Optional[Callable]=None):
+    if policy is None:
+        policy = lambda s: env.action_space.sample()
+
+    states = []
+    actions = []
+    rewards = []
+    next_states = []
+    dones = []
+
+    s = env.reset()
+    for i in tqdm(range(num_steps)):
+        a = policy(s)
+        sp, r, d, info = env.step(a)
+
+        states.append(s.copy())
+        actions.append(a.copy())
+        rewards.append(r)
+        next_states.append(sp.copy())
+        dones.append(d)
+
+        s = sp.copy()
+        if d:
+            s = env.reset()
+
+    with h5py.File(hdf5_file, 'w') as hf:
+        hf.create_dataset('states', data=np.array(states, dtype=np.uint8))
+        hf.create_dataset('actions', data=np.array(actions, dtype=np.int8))
+        hf.create_dataset('rewards', data=np.array(rewards, dtype=np.float32))
+        hf.create_dataset('next_states', data=np.array(next_states, dtype=np.uint8))
+        hf.create_dataset('dones', data=np.array(dones, dtype=bool))
 
 
 def watch_policy(env: TopDownGraspingEnv, policy: Optional[Callable]=None):
