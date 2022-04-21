@@ -33,6 +33,10 @@ class RobotArm:
         # chosen to move arm out of view of camera
         self.home_arm_jpos = [0., -1.1, 1.4, 1.3, 0.]
 
+        self.bin_1_drop_pos = [1, -1.1, -0.75, 1.3, 0.]
+        self.bin_2_drop_pos = [0., -1.1, -0.75, 1.3, 0.]
+        self.bin_3_drop_pos = [-1, -1.1, -0.75, 1.3, 0.]
+
         # joint constraints are needed for four-bar linkage in xarm fingers
         for i in [0,1]:
             constraint = pb.createConstraint(self._id,
@@ -57,7 +61,7 @@ class RobotArm:
                                      pb.POSITION_CONTROL,
                                      forces=[0,0,0])
 
-    def move_gripper_to(self, position: List[float], theta: float):
+    def move_gripper_to(self, position: List[float], theta: float, teleport: bool=False):
         '''Commands motors to move end effector to desired position, oriented
         downwards with a rotation of theta about z-axis
 
@@ -74,9 +78,14 @@ class RobotArm:
             True if movement is successful, False otherwise.
         '''
         quat = pb.getQuaternionFromEuler((0,-np.pi,theta))
-        arm_jpos, _ = self.solve_ik(position, quat)
 
-        return self.move_arm_to_jpos(arm_jpos)
+        arm_jpos = self.solve_ik(position, quat)
+
+        if teleport:
+            self.teleport_arm(arm_jpos)
+            return True
+        else:
+            return self.move_arm_to_jpos(arm_jpos)
 
     def solve_ik(self,
                  pos: List[float],
@@ -108,6 +117,12 @@ class RobotArm:
                 {'position' : || pos - achieved_pos ||,
                  'orientation' : 1 - |<quat, achieved_quat>|}
         '''
+        old_arm_jpos = list(zip(*pb.getJointStates(self._id, self.arm_joint_ids)))[0]
+
+        # good initial arm jpos for ik
+        [pb.resetJointState(self._id, i, jp)
+            for i,jp in zip(self.arm_joint_ids, self.home_arm_jpos)]
+
         n_joints = pb.getNumJoints(self._id)
         all_jpos = pb.calculateInverseKinematics(self._id,
                                                  self.end_effector_link_index,
@@ -117,16 +132,9 @@ class RobotArm:
                                                  jointDamping=n_joints*[0.005])
         arm_jpos = all_jpos[:len(self.arm_joint_ids)]
 
-        # teleport arm to check acheived pos and orientation
-        old_arm_jpos = list(zip(*pb.getJointStates(self._id, self.arm_joint_ids)))[0]
-        [pb.resetJointState(self._id, i, jp) for i,jp in zip(self.arm_joint_ids, arm_jpos)]
-        achieved_pos, achieved_quat = pb.getLinkState(self._id, self.end_effector_link_index)[:2]
-        [pb.resetJointState(self._id, i, jp) for i,jp in zip(self.arm_joint_ids, old_arm_jpos)]
+        self.teleport_arm(old_arm_jpos)
 
-        residuals = {'position' : np.linalg.norm(np.subtract(pos, achieved_pos)),
-                     'orientation' : 1 - np.abs(np.dot(quat, achieved_quat))}
-
-        return arm_jpos, residuals
+        return arm_jpos
 
     def move_arm_to_jpos(self, arm_jpos: List[float]) -> bool:
         '''Commands motors to move arm to desired joint positions
@@ -149,9 +157,24 @@ class RobotArm:
                                      pb.POSITION_CONTROL,
                                      jpos,
                                      positionGain=0.2,
-                                     maxVelocity=0.8)
+                                     maxVelocity=1.0)
 
         return self.monitor_movement(arm_jpos, self.arm_joint_ids)
+
+    def teleport_arm(self, arm_jpos: List[float]) -> None:
+        [pb.resetJointState(self._id, i, jp)
+            for i,jp in zip(self.arm_joint_ids, arm_jpos)]
+
+    def teleport_gripper(self, gripper_state: float) -> None:
+        assert 0 <= gripper_state <= 1, 'Gripper state must be in range [0,1]'
+
+        gripper_jpos = (1-gripper_state)*self.gripper_joint_limits[0] \
+                       + gripper_state*self.gripper_joint_limits[1]
+        [pb.resetJointState(self._id, i, jp)
+            for i,jp in zip(self.gripper_joint_ids, gripper_jpos)]
+
+        [pb.resetJointState(self._id, j_id, jpos)
+                 for j_id,jpos in zip(self.hand_joint_ids, self.hand_rest_states)]
 
     def set_gripper_state(self, gripper_state: float) -> bool:
         '''Commands motors to move gripper to given state
@@ -222,63 +245,60 @@ class RobotArm:
                 # success
                 return True
 
-            if np.allclose(achieved_jpos, old_jpos, atol=1e-3):
+            if np.allclose(achieved_jpos, old_jpos, atol=1e-2):
                 # movement stopped
                 return False
             old_jpos = achieved_jpos
 
 
 class Camera:
-    def __init__(self, workspace: np.ndarray) -> None:
+    def __init__(self, workspace: np.ndarray, img_size: int) -> None:
         '''Camera that is mounted to view workspace from above
-
         Hint
         ----
         For this camera setup, it may be easiest if you use the functions
         `pybullet.computeViewMatrix` and `pybullet.computeProjectionMatrixFOV`.
         cameraUpVector should be (0,1,0)
-
         Parameters
         ----------
         workspace
             2d array describing extents of robot workspace that is to be viewed,
             in the format: ((min_x,min_y), (max_x, max_y))
-
         Attributes
         ----------
-        img_width : int
-            width of rendered image
-        img_height : int
-            height of rendered image
+        img_size : int
+            height, width of rendered image
         view_mtx : List[float]
             view matrix that is positioned to view center of workspace from above
         proj_mtx : List[float]
             proj matrix that set up to fully view workspace
         '''
-        self.img_width = 100
-        self.img_height = 100
+        self.img_size = img_size
+
+        cam_height = 0.25
+        workspace_width = workspace[1,0] - workspace[0,0]
+        fov = 2 * np.degrees(np.arctan2(workspace_width/2, cam_height))
 
         cx, cy = np.mean(workspace, axis=0)
-        eye_pos = (cx, cy, 0.25)
+        eye_pos = (cx, cy, cam_height)
         target_pos = (cx, cy, 0)
         self.view_mtx = pb.computeViewMatrix(cameraEyePosition=eye_pos,
                                              cameraTargetPosition=target_pos,
-                                            cameraUpVector=(0,1,0))
-        self.proj_mtx = pb.computeProjectionMatrixFOV(fov=42,
+                                            cameraUpVector=(-1,0,0))
+        self.proj_mtx = pb.computeProjectionMatrixFOV(fov=fov,
                                                       aspect=1,
                                                       nearVal=0.01,
                                                       farVal=1)
 
     def get_rgb_image(self) -> np.ndarray:
         '''Takes rgb image
-
         Returns
         -------
         np.ndarray
             shape (H,W,3) with dtype=np.uint8
         '''
-        rgba = pb.getCameraImage(width=self.img_width,
-                                 height=self.img_height,
+        rgba = pb.getCameraImage(width=self.img_size,
+                                 height=self.img_size,
                                  viewMatrix=self.view_mtx,
                                  projectionMatrix=self.proj_mtx,
                                  renderer=pb.ER_TINY_RENDERER)[2]
@@ -286,8 +306,13 @@ class Camera:
         return rgba[...,:3]
 
 
-class TopDownGraspingEnv:
-    def __init__(self, render: bool=True) -> None:
+
+class TopDownGraspingEnv(gym.Env):
+    def __init__(self,
+                 episode_length: int=3,
+                 img_size: int=42,
+                 render: bool=False,
+                ) -> None:
         '''Pybullet simulator with robot that performs top down grasps of a
         single object.  A camera is positioned to take images of workspace
         from above.
@@ -298,6 +323,8 @@ class TopDownGraspingEnv:
                                      solverResidualThreshold=1e-7,
                                      constraintSolverType=pb.CONSTRAINT_SOLVER_LCP_SI)
         pb.setGravity(0,0,-10)
+
+        self.tex_ids = [pb.loadTexture(f) for f in glob.glob('assets/textures/*.png')]
 
         # create ground plane
         pb.setAdditionalSearchPath(pybullet_data.getDataPath())
@@ -316,38 +343,89 @@ class TopDownGraspingEnv:
         self.robot = RobotArm()
 
         # add object
-        self.object_id = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        pb.changeDynamics(self.object_id, -1,
+        self.object_id1 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        self.object_id2 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        self.object_id3 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        self.object_id4 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        self.object_id5 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        
+        pb.changeDynamics(self.object_id1, -1,
                           lateralFriction=1,
                           spinningFriction=0.005,
                           rollingFriction=0.005)
+        pb.changeDynamics(self.object_id2, -1,
+                          lateralFriction=1,
+                          spinningFriction=0.005,
+                          rollingFriction=0.005)
+        pb.changeDynamics(self.object_id3, -1,
+                          lateralFriction=1,
+                          spinningFriction=0.005,
+                          rollingFriction=0.005)
+        pb.changeDynamics(self.object_id4, -1,
+                          lateralFriction=1,
+                          spinningFriction=0.005,
+                          rollingFriction=0.005)
+        pb.changeDynamics(self.object_id5, -1,
+                          lateralFriction=1,
+                          spinningFriction=0.005,
+                          rollingFriction=0.005)
+        
         self.object_width = 0.02
 
         self.workspace = np.array(((0.10, -0.05), # ((min_x, min_y)
                                    (0.20, 0.05))) #  (max_x, max_y))
-        self.grasp_height = self.object_width/2
-        if render:
-            self.draw_workspace()
 
-        # add camera
-        self.camera = Camera(self.workspace)
+        self.camera = Camera(self.workspace, img_size)
+        self.img_size = img_size
 
-    def draw_workspace(self) -> None:
-        '''This is just for visualization purposes, to help you with the object
-        resetting.  Must be in GUI mode, otherwise error occurs
+        self.t_step = 0
+        self.episode_length = episode_length
 
-        Note
-        ----
-        Pybullet debug lines only show up in GUI mode so they won't help you
-        with camera placement.
+        self.observation_space = gym.spaces.Box(0, 255,
+                                                shape=(img_size, img_size, 3),
+                                                dtype=np.uint8)
+        self.action_space = gym.spaces.Box(0, img_size-1, shape=(2,), dtype=int)
+    
+    def reset(self) -> np.ndarray:
+        '''Resets environment by randomly placing object
         '''
-        corner_ids = ((0,0), (0,1), (1,1), (1,0), (0,0))
-        for i in range(4):
-            start = (*self.workspace[corner_ids[i],[0,1]], 0.)
-            end = (*self.workspace[corner_ids[i+1],[0,1]], 0.)
-            pb.addUserDebugLine(start, end, (0,0,0), 3)
+        self.reset_object_position()
+        self.reset_object_texture()
+        self.t_step = 0
 
-    def perform_grasp(self, x, y, theta) -> bool:
+        return self.get_obs()
+
+    def step(self, action: np.ndarray):
+        assert self.action_space.contains(action)
+
+        x,y = self._convert_from_pixel(np.array(action))
+
+        success = self.perform_grasp(x, y)
+        self.t_step += 1
+
+        obs = self.get_obs()
+        reward = float(success)
+        done = success or self.t_step >= self.episode_length
+        info = {'success' : success}
+
+        return obs, reward, done, info
+
+    def _convert_from_pixel(self, pxy: np.ndarray) -> np.ndarray:
+        xy_norm = pxy.astype(float) / self.img_size
+
+        xy = xy_norm * np.subtract(*self.workspace[::-1]) + self.workspace[0]
+        return xy
+
+    def _convert_to_pixel(self, xy: np.ndarray) -> np.ndarray:
+        xy_norm = np.subtract(xy, self.workspace[0]) \
+                    / np.subtract(*self.workspace[::-1])
+        xy_norm = np.clip(xy_norm, 0, 1)
+
+        #xy axis are flipped from world to image space
+        pxy = self.img_size * xy_norm
+        return pxy.astype(int)
+
+    def perform_grasp(self, x, y, theta, object) -> bool:
         '''Perform top down grasp in the workspace.  All grasps will occur
         at a height of the center of mass of the object (i.e. object_width/2)
 
@@ -376,10 +454,17 @@ class TopDownGraspingEnv:
 
         # check if object is above plane
         min_object_height = 0.05
-        obj_height = pb.getBasePositionAndOrientation(self.object_id)[0][2]
+        obj_height = pb.getBasePositionAndOrientation(object)[0][2]
         success = obj_height > min_object_height
 
         return success
+
+    def move_to_bin(self, bin) -> None:
+        '''Moves arm to given bin location and then drops the object in the bin.
+        '''
+        self.robot.move_arm_to_jpos(bin)
+        self.robot.set_gripper_state(self.robot.GRIPPER_OPENED)
+        self.robot.move_arm_to_jpos(self.robot.home_arm_jpos)
 
     def sample_random_grasp(self) -> Tuple[float, float, float]:
         '''Samples random grasp (x,y,theta) located within the workspace
@@ -393,7 +478,7 @@ class TopDownGraspingEnv:
         theta = np.random.uniform(0, 2*np.pi)
         return x, y, theta
 
-    def sample_expert_grasp(self) -> Tuple[float, float, float]:
+    def sample_expert_grasp(self, object) -> Tuple[float, float, float]:
         '''Samples expert grasp (x,y,theta) located within the workspace. An
         expert grasp can be determined using information about the state of the
         object. It should have >90% success rate if implemented correctly.
@@ -403,85 +488,45 @@ class TopDownGraspingEnv:
         tuple
             x, y, theta (radians)
         '''
-        obj_pos, obj_quat = pb.getBasePositionAndOrientation(self.object_id)
+        obj_pos, obj_quat = pb.getBasePositionAndOrientation(object)
         x, y = obj_pos[:2]
         theta = pb.getEulerFromQuaternion(obj_quat)[2]
 
         return x, y, theta
 
-    def reset_object_position(self) -> None:
+    def reset_object_position(self, object) -> None:
         '''Places object randomly in workspace.  The x,y position should be
         within the workspace, and the rotation performed only about z-axis.
         The height of the object should be set such that it sits on the plane
         '''
-        x,y = np.random.uniform(self.workspace[0], self.workspace[1])
-        theta = np.random.uniform(0, 2*np.pi)
-        pos = np.array((x,y,self.object_width/2))
-        quat = pb.getQuaternionFromEuler((0,0, theta))
-        pb.resetBasePositionAndOrientation(self.object_id, pos, quat)
+        ws_padding = 0.01
+        x,y = np.random.uniform(self.workspace[0]+ws_padding,
+                                self.workspace[1]-ws_padding)
+        theta = np.random.uniform(-np.pi/2, np.pi/2)
 
-    def reset_object_texture(self) -> None:
+        pos = np.array((x,y,self.object_width/2))
+        quat = pb.getQuaternionFromEuler((np.random.randint(2)*np.pi,0, theta))
+        pb.resetBasePositionAndOrientation(object, pos, quat)
+
+    def reset_object_texture(self, object) -> List:
         '''Randomly assigns a texture to the object.  Available textures are
         located within the `nuro_arm/assets/textures` folder.
         '''
         colors = [(0,1,0,1), (1,0,0,1), (0,0,1,1)]
         randColor = random.choice(colors)
-        pb.changeVisualShape(self.object_id, -1, -1,
+        pb.changeVisualShape(object, -1, -1,
                              rgbaColor=randColor)
 
-    def take_picture(self) -> np.ndarray:
-        '''Takes picture using camera
+        return randColor
 
+    def get_obs(self) -> np.ndarray:
+        '''Takes picture using camera
         Returns
         -------
         np.ndarray
             rgb image of shape (H,W,3) and dtype of np.uint8
         '''
         return self.camera.get_rgb_image()
-
-
-def check_workspace_reachability():
-    '''Use this to test your solve_ik implementation.  If it is working properly
-    then you should see a green semi circle that extends up to the edge of the
-    workspace.  Outside of this range, the robot is not able to perform a top
-    down grasp.
-    '''
-    env = TopDownGraspingEnv(True)
-
-    top_down_quat = pb.getQuaternionFromEuler((0,-np.pi,0))
-
-    # perform scan over x,y positions
-    for x in np.linspace(0.1, 0.3, num=20):
-        for y in np.linspace(-0.15, 0.15, num=20):
-            pos = np.array((x, y, env.grasp_height))
-            _, residuals = env.robot.solve_ik(pos, top_down_quat)
-
-            if residuals['position'] < 1e-2 and residuals['orientation'] < 1e-3:
-                color = (0,1,0) # green means its feasible
-            else:
-                color = (1,0,0) # red means not feasible
-
-            pb.addUserDebugLine(pos-0.001, pos+0.001, color, 10)
-
-    time.sleep(50)
-
-
-def test_move_gripper_to():
-    '''Use this to test your implementation of `RobotArm.move_gripper_to`.
-    If it is working correctly, then the gripper should move to a position, then slowly
-    rotate its gripper, before returning to the home position.
-    '''
-    env = TopDownGraspingEnv(True)
-
-    while 1:
-        env.robot.move_arm_to_jpos(env.robot.home_arm_jpos)
-
-        position = (0.16, 0., 0.01)
-        for theta in np.linspace(-np.pi/4, np.pi/4, num=6, endpoint=True):
-            env.robot.move_gripper_to(position, theta)
-            time.sleep(0.1)
-
-        time.sleep(0.5)
 
 
 def test_camera_placement():
@@ -498,7 +543,7 @@ def test_camera_placement():
 
     while 1:
         env.reset_object_position()
-        env.take_picture()
+        env.get_obs()
         time.sleep(0.5)
 
 
@@ -515,20 +560,67 @@ def mock_data_collection():
     '''
     env = TopDownGraspingEnv(True)
 
+    env_objects = [env.object_id1, env.object_id2, env.object_id3, env.object_id4, env.object_id5]
+    success = True
+    for i in env_objects:
+        env.reset_object_texture(i)
+        env.reset_object_position(i)
+
+
     while True:
-        env.reset_object_position()
-        env.reset_object_texture()
-        img = env.take_picture()
+        if not success:
+            for j in env_objects:
+                env.reset_object_texture(j)
+                env.reset_object_position(j)
+        color = env.reset_object_texture(object)
 
-        # if np.random.random() > 0.5:
-        #     x,y,th = env.sample_expert_grasp()
-        # else:
-        #     x,y,th = env.sample_random_grasp()
-        x,y,th = env.sample_expert_grasp()
+        img = get_obs()
+        
+        if np.random.random() > 0.5:
+            x,y,th = env.sample_expert_grasp()
+        else:
+            x,y,th = env.sample_random_grasp()
+        if (color[0] == 1):
+            colorBin = env.robot.bin_1_drop_pos
+            color = "Red"
+        elif (color[1] == 1):
+            colorBin = env.robot.bin_2_drop_pos
+            color = "Green"
+        elif (color[2] == 1):
+            colorBin = env.robot.bin_3_drop_pos
+            color = "Blue"
 
-        success = env.perform_grasp(x, y, th)
+        objects = [env.object_id1, env.object_id2, env.object_id3, env.object_id4, env.object_id5]
+        randObject = random.choice(objects)
+        objects.remove(randObject)
+
+        x,y,th = env.sample_expert_grasp(randObject)
+
+        success = env.perform_grasp(x, y, th, randObject)
+        if success:
+            env.move_to_bin(colorBin)
+        #print("Object is " + color)
         print("SUCCESS!" if success else "failure")
 
 
+def watch_policy(env: TopDownGraspingEnv, policy: Optional[Callable]=None):
+    if policy is None:
+        policy = lambda s: env.action_space.sample()
+
+    s = env.reset()
+    while 1:
+        a = policy(s)
+        sp, r, d, info = env.step(a)
+        time.sleep(0.5)
+
+        s = sp.copy()
+        if d:
+            s = env.reset()
+            time.sleep(1)
+
+
 if __name__ == "__main__":
-    mock_data_collection()
+    env = TopDownGraspingEnv(render=True)
+    mock_data_collection() # Used this for demos
+
+    # watch_policy(env)
