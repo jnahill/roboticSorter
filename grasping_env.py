@@ -396,7 +396,7 @@ class TopDownGraspingEnv(gym.Env):
         '''Resets environment by randomly placing object
         '''
         self.reset_object_position()
-        self.reset_object_texture()
+        # self.reset_object_texture()
         self.t_step = 0
 
         return self.get_obs()
@@ -431,7 +431,41 @@ class TopDownGraspingEnv(gym.Env):
         pxy = self.img_size * xy_norm
         return pxy.astype(int)
 
-    def perform_grasp(self, x, y, theta, object) -> bool:
+    def perform_grasp(self, x: float, y: float, theta: float=0) -> bool:
+        '''Perform top down grasp in the workspace.  All grasps will occur
+        at a height of the center of mass of the object (i.e. object_width/2)
+        Parameters
+        ----------
+        x
+            x position of the grasp in world frame
+        y
+            y position of the grasp in world frame
+        theta, default=0
+            target rotation about z-axis of gripper during grasp
+        Returns
+        -------
+        bool
+            True if object was successfully grasped, False otherwise. It is up
+            to you to decide how to determine success
+        '''
+        self.robot.teleport_arm(self.robot.home_arm_jpos)
+        self.robot.set_gripper_state(self.robot.GRIPPER_OPENED)
+
+        pos = np.array((x, y, self.object_width/2))
+
+        self.robot.move_gripper_to(pos, theta, teleport=True)
+        self.robot.set_gripper_state(self.robot.GRIPPER_CLOSED)
+
+        self.robot.move_arm_to_jpos(self.robot.home_arm_jpos)
+
+        # check if object is above plane
+        min_object_height = 0.2
+        obj_height = pb.getBasePositionAndOrientation(self.object_id)[0][2]
+        success = obj_height > min_object_height
+
+        return success
+
+    def perform_object_grasp(self, x, y, theta, object) -> bool:
         '''Perform top down grasp in the workspace.  All grasps will occur
         at a height of the center of mass of the object (i.e. object_width/2)
 
@@ -626,7 +660,7 @@ def mock_data_collection():
 
         x,y,th = env.sample_expert_grasp(randObject)
 
-        success = env.perform_grasp(x, y, th, randObject)
+        success = env.perform_object_grasp(x, y, th, randObject)
         if success:
             env.move_to_bin(colorBin)
         #print("Object is " + color)
