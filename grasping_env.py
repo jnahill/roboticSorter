@@ -751,5 +751,12 @@ def watch_policy(env: TopDownGraspingEnv, policy: Optional[Callable]=None):
 if __name__ == "__main__":
     env = TopDownGraspingEnv(render=True)
     # mock_data_collection() # Used this for demos
+    from agent import DQNAgent
 
-    watch_policy(env)
+    agent = DQNAgent(env)
+
+    model_path = 'q_network.pt'
+    agent.load_network(model_path)
+
+
+    watch_policy(env, agent.policy)
