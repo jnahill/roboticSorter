@@ -254,13 +254,13 @@ if __name__ == "__main__":
 
     agent = DQNAgent(env= env,
                      gamma= 0.98,
-                     learning_rate= 1,
+                     learning_rate= 1e-4,
                      buffer_size= 250,
                      batch_size= 64,
                      initial_epsilon= 0.3,
                      final_epsilon=0.01,
                      update_method='standard',
-                     exploration_fraction=0.1,
+                     exploration_fraction=0.9,
                      target_network_update_freq= 200,
                      seed= 1,
                      device= 'cpu')
