@@ -12,7 +12,7 @@ def plot_predictions(images, qmaps, actions):
 
     for ci in range(axs.shape[1]):
         axs[0,ci].imshow(images[ci].permute((1,2,0)).cpu())
-        px, py = actions[ci].squeeze().cpu().numpy()
+        rot, px, py = actions[ci].squeeze().cpu().numpy()
         axs[0,ci].plot(py, px, 'w+', markersize=6, markeredgewidth=2)
         axs[0,ci].plot(py, px, 'r+', markersize=5)
 

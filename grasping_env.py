@@ -6,10 +6,10 @@ import torch.nn as nn
 import numpy as np
 import pybullet as pb
 import pybullet_data
-import gym
 import time
 from tqdm import tqdm
 import h5py
+import gym
 
 class RobotArm:
     GRIPPER_CLOSED = 0.
@@ -314,7 +314,7 @@ class Camera:
 
 class TopDownGraspingEnv(gym.Env):
     def __init__(self,
-                 episode_length: int=3,
+                 episode_length: int=1,
                  img_size: int=42,
                  render: bool=False,
                 ) -> None:
@@ -349,32 +349,37 @@ class TopDownGraspingEnv(gym.Env):
 
         # add object
         self.object_id = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        self.object_id1 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        self.object_id2 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        self.object_id3 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        self.object_id4 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        self.object_id5 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        # self.object_id1 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        # self.object_id2 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        # self.object_id3 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        # self.object_id4 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        # self.object_id5 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+
+        pb.changeDynamics(self.object_id, -1,
+                          lateralFriction=1,
+                          spinningFriction=0.005,
+                          rollingFriction=0.005)
         
-        pb.changeDynamics(self.object_id1, -1,
-                          lateralFriction=1,
-                          spinningFriction=0.005,
-                          rollingFriction=0.005)
-        pb.changeDynamics(self.object_id2, -1,
-                          lateralFriction=1,
-                          spinningFriction=0.005,
-                          rollingFriction=0.005)
-        pb.changeDynamics(self.object_id3, -1,
-                          lateralFriction=1,
-                          spinningFriction=0.005,
-                          rollingFriction=0.005)
-        pb.changeDynamics(self.object_id4, -1,
-                          lateralFriction=1,
-                          spinningFriction=0.005,
-                          rollingFriction=0.005)
-        pb.changeDynamics(self.object_id5, -1,
-                          lateralFriction=1,
-                          spinningFriction=0.005,
-                          rollingFriction=0.005)
+        # pb.changeDynamics(self.object_id1, -1,
+        #                   lateralFriction=1,
+        #                   spinningFriction=0.005,
+        #                   rollingFriction=0.005)
+        # pb.changeDynamics(self.object_id2, -1,
+        #                   lateralFriction=1,
+        #                   spinningFriction=0.005,
+        #                   rollingFriction=0.005)
+        # pb.changeDynamics(self.object_id3, -1,
+        #                   lateralFriction=1,
+        #                   spinningFriction=0.005,
+        #                   rollingFriction=0.005)
+        # pb.changeDynamics(self.object_id4, -1,
+        #                   lateralFriction=1,
+        #                   spinningFriction=0.005,
+        #                   rollingFriction=0.005)
+        # pb.changeDynamics(self.object_id5, -1,
+        #                   lateralFriction=1,
+        #                   spinningFriction=0.005,
+        #                   rollingFriction=0.005)
         
         self.object_width = 0.02
 
@@ -390,7 +395,9 @@ class TopDownGraspingEnv(gym.Env):
         self.observation_space = gym.spaces.Box(0, 255,
                                                 shape=(img_size, img_size, 3),
                                                 dtype=np.uint8)
-        self.action_space = gym.spaces.Box(0, img_size-1, shape=(2,), dtype=int)
+        self.action_space = gym.spaces.Box(np.array([0,0,0]), np.array([5,img_size-1, img_size-1]), dtype=int)
+        #print(self.action_space.sample())
+        # Change shape to 3
     
     def reset(self) -> np.ndarray:
         '''Resets environment by randomly placing object
@@ -402,11 +409,14 @@ class TopDownGraspingEnv(gym.Env):
         return self.get_obs()
 
     def step(self, action: np.ndarray):
+        # print(action)
+
         assert self.action_space.contains(action)
 
-        x,y = self._convert_from_pixel(np.array(action))
+        x,y = self._convert_from_pixel(np.array(action)[1:])
+        rot = np.pi/6 * np.array(action)[0]
 
-        success = self.perform_grasp(x, y)
+        success = self.perform_grasp(x, y, rot)
         self.t_step += 1
 
         obs = self.get_obs()
@@ -720,6 +730,6 @@ def watch_policy(env: TopDownGraspingEnv, policy: Optional[Callable]=None):
 
 if __name__ == "__main__":
     env = TopDownGraspingEnv(render=True)
-    mock_data_collection() # Used this for demos
+    # mock_data_collection() # Used this for demos
 
-    # watch_policy(env)
+    watch_policy(env)

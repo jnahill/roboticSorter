@@ -9,10 +9,24 @@ def argmax2d(x: Tensor) -> Tensor:
     with the indices of the maximum value in each feature map of the batch
     '''
     flat_idxs = torch.max( torch.flatten(x, 2), dim=2 )[1]
-    h_idxs = torch.div(flat_idxs, x.size(2), rounding_mode='floor') # equiv to //
+    h_idxs = torch.div(flat_idxs, x.size(2)) # equiv to //
     w_idxs = flat_idxs % x.size(2)
 
     return torch.stack([h_idxs, w_idxs], dim=-1)
+
+def argmax3d(x: Tensor) -> Tensor:
+    '''Given tensor with shape (B, C, H, W) returns a long tensor of shape (B,3)
+    with the indices of the maximum value in each feature map of the batch
+    '''
+    flat_idxs = torch.max( torch.flatten(x, 1), dim=1 )[1]
+    w_idxs = flat_idxs % x.size(3)
+    flat_idxs = torch.div(flat_idxs, x.size(3))
+    h_idxs = flat_idxs % x.size(2)  # equiv to //
+    flat_idxs = torch.div(flat_idxs, x.size(2))
+    c_idxs = flat_idxs % x.size(1)
+
+    return torch.stack([c_idxs, h_idxs, w_idxs], dim=-1)
+
 
 
 class PixelWiseQNetwork(nn.Module):
@@ -34,10 +48,10 @@ class PixelWiseQNetwork(nn.Module):
         self.conv3 = nn.ConvTranspose2d(in_channels=32, out_channels=16, kernel_size=3, stride=2)
         self.conv4 = nn.ConvTranspose2d(in_channels=32, out_channels=8, kernel_size=3, stride=2, output_padding=1)
         self.conv5 = nn.ConvTranspose2d(in_channels=16, out_channels=8, kernel_size=3, stride=2, output_padding=1)
-        self.conv6 = nn.Conv2d(in_channels=8, out_channels=1, kernel_size=3, padding=1)
+        self.conv6 = nn.Conv2d(in_channels=8, out_channels=6, kernel_size=3, padding=1)
 
         self.relu = nn.ReLU(inplace=True)
-        self.loss_fn = nn.BCELoss()
+        self.loss_fn = nn.MSELoss()
 
 
     def forward(self, x: Tensor) -> Tensor:
@@ -85,7 +99,7 @@ class PixelWiseQNetwork(nn.Module):
             along height and width dimensions of image
         '''
         q_map = self.forward(x)
-        return argmax2d(q_map).squeeze(1)
+        return argmax3d(q_map)
 
     def compute_loss(self, q_pred: Tensor, q_target: Tensor) -> Tensor:
         return self.loss_fn(q_pred, q_target)

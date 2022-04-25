@@ -7,13 +7,13 @@ import gym
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
-from networks import PixelWiseQNetwork, argmax2d
+from networks import PixelWiseQNetwork, argmax3d
 from utils import ReplayBuffer, plot_predictions, plot_curves
 
 
 class DQNAgent:
     def __init__(self,
-                 env: gym.Env,
+                 env,
                  gamma: float,
                  learning_rate: float,
                  buffer_size: int,
@@ -79,6 +79,7 @@ class DQNAgent:
             progress_fraction = step/(self.exploration_fraction*num_steps)
             epsilon = self.compute_epsilon(progress_fraction)
             a = self.select_action(s, epsilon)
+            print(a)
 
             sp, r, done, info = self.env.step(a)
             episode_rewards += r
@@ -95,6 +96,7 @@ class DQNAgent:
             s = sp.copy()
             if done:
                 s = self.env.reset()
+                print(info['success'])
                 rewards_data.append(episode_rewards)
                 success_data.append(info['success'])
 
@@ -110,7 +112,7 @@ class DQNAgent:
 
                 with torch.no_grad():
                     q_map_pred = self.network(imgs)
-                    actions = argmax2d(q_map_pred)
+                    actions = argmax3d(q_map_pred)
                 plot_predictions(imgs, q_map_pred, actions)
                 plot_curves(rewards_data, success_data, loss_data)
                 plt.show()
@@ -177,10 +179,17 @@ class DQNAgent:
         sp : tensor of next state images, dtype=torch.float32, shape=(B, C, H, W)
         d : tensor of done flags, dtype=torch.float32, shape=(B,)
         '''
-        s = torch.tensor(s, dtype=torch.float32).to(self.device)
+
+
+
+        s_permuted = (torch.from_numpy(s).to(device=self.device, dtype=torch.float32)/255).permute([0,3,1,2])
+        sp_permuted = (torch.from_numpy(sp).to(device=self.device, dtype=torch.float32)/255).permute([0,3,1,2])
+
+
+        s = torch.tensor(s_permuted, dtype=torch.float32).to(self.device)
         a = torch.tensor(a, dtype=torch.long).to(self.device)
         r = torch.tensor(r, dtype=torch.float32).to(self.device)
-        sp = torch.tensor(sp, dtype=torch.float32).to(self.device)
+        sp = torch.tensor(sp_permuted, dtype=torch.float32).to(self.device)
         d = torch.tensor(d, dtype=torch.float32).to(self.device)
 
 
@@ -244,16 +253,16 @@ if __name__ == "__main__":
     env = TopDownGraspingEnv(render=False)
 
     agent = DQNAgent(env= env,
-                     gamma= 0.5,
-                     learning_rate= 1e-3,
-                     buffer_size= 4000,
+                     gamma= 0.98,
+                     learning_rate= 1,
+                     buffer_size= 250,
                      batch_size= 64,
                      initial_epsilon= 0.3,
                      final_epsilon=0.01,
                      update_method='standard',
-                     exploration_fraction=0.9,
+                     exploration_fraction=0.1,
                      target_network_update_freq= 200,
                      seed= 1,
                      device= 'cpu')
 
-    agent.train(1000, 100)
+    agent.train(1000, 500)
