@@ -84,7 +84,7 @@ class PixelWiseQNetwork(nn.Module):
 
     @torch.no_grad()
     def predict(self, x: Tensor) -> Tensor:
-        '''Predicts action (px,py) for each state by taking 2dargmax of qmap
+        '''Predicts action (px,py) for each state by taking 3dargmax of qmap
         predictions.  Gradient calculation is disabled
 
         Parameters

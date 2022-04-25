@@ -131,7 +131,7 @@ class DQNAgent:
         s, a, r, sp, d = self.prepare_batch(*batch)
 
         q_map_pred = self.network(s)
-        q_pred = q_map_pred[np.arange(len(s)), 0, a[:,0], a[:,1]]
+        q_pred = q_map_pred[np.arange(len(s)), a[:,0], a[:,1], a[:,2]]
 
         if self.update_method == 'standard':
             with torch.no_grad():
@@ -253,7 +253,7 @@ if __name__ == "__main__":
     env = TopDownGraspingEnv(render=False)
 
     agent = DQNAgent(env= env,
-                     gamma= 0.50,
+                     gamma= 0,
                      learning_rate= 1e-4,
                      buffer_size= 250,
                      batch_size= 64,
@@ -261,8 +261,8 @@ if __name__ == "__main__":
                      final_epsilon=0.01,
                      update_method='standard',
                      exploration_fraction=0.9,
-                     target_network_update_freq= 200,
+                     target_network_update_freq=200,
                      seed= 1,
                      device= 'cpu')
 
-    agent.train(1000, 500)
+    agent.train(1000, 1000)
