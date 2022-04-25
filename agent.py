@@ -253,7 +253,7 @@ if __name__ == "__main__":
     env = TopDownGraspingEnv(render=False)
 
     agent = DQNAgent(env= env,
-                     gamma= 0.98,
+                     gamma= 0.50,
                      learning_rate= 1e-4,
                      buffer_size= 250,
                      batch_size= 64,
