@@ -79,7 +79,6 @@ class DQNAgent:
             progress_fraction = step/(self.exploration_fraction*num_steps)
             epsilon = self.compute_epsilon(progress_fraction)
             a = self.select_action(s, epsilon)
-            print(a)
 
             sp, r, done, info = self.env.step(a)
             episode_rewards += r
@@ -87,7 +86,7 @@ class DQNAgent:
             self.buffer.add_transition(s=s, a=a, r=r, sp=sp, d=done)
 
             # optimize
-            if len(self.buffer) > self.batch_size:
+            if len(self.buffer) > 5*self.batch_size and step % 5 == 0:
                 loss = self.optimize()
                 loss_data.append(loss)
                 if len(loss_data) % self.target_network_update_freq == 0:
@@ -96,7 +95,7 @@ class DQNAgent:
             s = sp.copy()
             if done:
                 s = self.env.reset()
-                print(info['success'])
+                # print(info['success'])
                 rewards_data.append(episode_rewards)
                 success_data.append(info['success'])
 
@@ -137,14 +136,14 @@ class DQNAgent:
             with torch.no_grad():
                 q_map_next = self.target_network(sp)
                 q_next = torch.max( torch.flatten(q_map_next, 1), dim=1)[0]
-                q_target = r + self.gamma * q_next * (1-d)
+                q_target = r# + self.gamma * q_next * (1-d)
 
-        elif self.update_method == 'double':
-            with torch.no_grad():
-                q_map_next = self.target_network(sp)
-                q_next = torch.flatten(q_map_next, torch.argmax(torch.flatten(q_map_next, 1), dim=1)[0])
-                q_target = r + self.gamma * q_next * (1-d)
-                
+        # this needs to be updatedd for new action space
+        # elif self.update_method == 'double':
+            # with torch.no_grad():
+                # q_map_next = self.target_network(sp)
+                # q_next = torch.flatten(q_map_next, torch.argmax(torch.flatten(q_map_next, 1), dim=1)[0])
+                # q_target = r + self.gamma * q_next * (1-d)
 
         assert q_pred.shape == q_target.shape
         self.optim.zero_grad()
@@ -257,12 +256,13 @@ if __name__ == "__main__":
                      learning_rate= 1e-4,
                      buffer_size= 250,
                      batch_size= 64,
-                     initial_epsilon= 0.3,
+                     initial_epsilon= 0.5,
                      final_epsilon=0.01,
                      update_method='standard',
                      exploration_fraction=0.9,
                      target_network_update_freq=200,
                      seed= 1,
-                     device= 'cpu')
+                     device= 'cuda')
 
     agent.train(1000, 1000)
+    agent.save_network()

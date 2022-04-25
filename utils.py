@@ -16,7 +16,7 @@ def plot_predictions(images, qmaps, actions):
         axs[0,ci].plot(py, px, 'w+', markersize=6, markeredgewidth=2)
         axs[0,ci].plot(py, px, 'r+', markersize=5)
 
-        axs[1,ci].imshow(qmaps[ci,0].cpu())
+        axs[1,ci].imshow(qmaps[ci, actions[ci,0]].cpu())
 
     axs[0,0].text(-8, 30, 'Images', rotation='vertical')
     axs[1,0].text(-8, 30, 'Qmaps', rotation='vertical')

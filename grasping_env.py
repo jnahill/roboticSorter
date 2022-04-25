@@ -214,6 +214,13 @@ class RobotArm:
         success = self.monitor_movement(gripper_jpos, self.gripper_joint_ids)
         return success
 
+    def get_gripper_state(self):
+        gripper_jpos = list(zip(*pb.getJointStates(self._id, self.gripper_joint_ids)))[0]
+        gripper_state = (gripper_jpos - self.gripper_joint_limits[0]) \
+                            / (self.gripper_joint_limits[1] - self.gripper_joint_limits[0])
+        gripper_state = np.clip(np.mean(gripper_state), 0, 1)
+        return gripper_state
+
     def monitor_movement(self,
                          target_jpos: List[float],
                          joint_ids: List[int],
@@ -409,12 +416,13 @@ class TopDownGraspingEnv(gym.Env):
         return self.get_obs()
 
     def step(self, action: np.ndarray):
-        # print(action)
 
         assert self.action_space.contains(action)
 
         x,y = self._convert_from_pixel(np.array(action)[1:])
-        rot = np.pi/6 * np.array(action)[0]
+
+        # to reduce motor movement, use theta from -np.pi/2 to np.pi/2
+        rot = np.pi/6 * np.array(action)[0] - np.pi/2
 
         success = self.perform_grasp(x, y, rot)
         self.t_step += 1
@@ -463,10 +471,22 @@ class TopDownGraspingEnv(gym.Env):
 
         pos = np.array((x, y, self.object_width/2))
 
-        self.robot.move_gripper_to(pos, theta, teleport=True)
-        self.robot.set_gripper_state(self.robot.GRIPPER_CLOSED)
+        quat = pb.getQuaternionFromEuler((0,-np.pi,theta))
+        arm_jpos = self.robot.solve_ik(pos, quat)
+        offset_arm_jpos = list(arm_jpos)
+        offset_arm_jpos[1] -= 0.2
+        self.robot.teleport_arm(offset_arm_jpos)
+        self.robot.move_arm_to_jpos(arm_jpos)
 
-        self.robot.move_arm_to_jpos(self.robot.home_arm_jpos)
+        self.robot.set_gripper_state(self.robot.GRIPPER_CLOSED)
+        if self.robot.get_gripper_state() < 0.05:
+            # gripper closed so we know its failed grasp
+            self.robot.teleport_arm(self.robot.home_arm_jpos)
+            return False
+
+        # no need to unrotate gripper
+        self.robot.move_arm_to_jpos(self.robot.home_arm_jpos[:-1] +
+                                    [pb.getJointState(self.robot._id, self.robot.arm_joint_ids[-1])[0]])
 
         # check if object is above plane
         min_object_height = 0.2
