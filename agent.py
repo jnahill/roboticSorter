@@ -249,12 +249,12 @@ class DQNAgent:
 
 if __name__ == "__main__":
     from grasping_env import TopDownGraspingEnv
-    env = TopDownGraspingEnv(render=False)
+    env = TopDownGraspingEnv(render=False, num_blocks=2)
 
     agent = DQNAgent(env= env,
                      gamma= 0,
                      learning_rate= 1e-4,
-                     buffer_size= 250,
+                     buffer_size= 1000,
                      batch_size= 64,
                      initial_epsilon= 0.5,
                      final_epsilon=0.01,
@@ -264,5 +264,6 @@ if __name__ == "__main__":
                      seed= 1,
                      device= 'cuda')
 
-    agent.train(1000, 1000)
-    agent.save_network()
+    agent.train(2000, 1000)
+    #agent.save_network('2_block_2000_q_network.pt')
+
