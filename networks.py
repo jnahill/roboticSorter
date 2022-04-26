@@ -20,9 +20,9 @@ def argmax3d(x: Tensor) -> Tensor:
     '''
     flat_idxs = torch.max( torch.flatten(x, 1), dim=1 )[1]
     w_idxs = flat_idxs % x.size(3)
-    flat_idxs = torch.div(flat_idxs, x.size(3), rounding_mode='floor')
+    flat_idxs = torch.div(flat_idxs, x.size(3))
     h_idxs = flat_idxs % x.size(2)  # equiv to //
-    flat_idxs = torch.div(flat_idxs, x.size(2), rounding_mode='floor')
+    flat_idxs = torch.div(flat_idxs, x.size(2))
     c_idxs = flat_idxs % x.size(1)
 
     return torch.stack([c_idxs, h_idxs, w_idxs], dim=-1)
@@ -68,7 +68,6 @@ class PixelWiseQNetwork(nn.Module):
             the q-network predicts the value of perfoming grasp at said pixel
             location
         '''
-        return self.layers(x)
         x_down1 = self.relu(self.conv0(x))
         x_down2 = self.relu(self.conv1(x_down1))
         x_down3 = self.relu(self.conv2(x_down2))
@@ -79,7 +78,7 @@ class PixelWiseQNetwork(nn.Module):
         
         x_out = self.conv6(x_up3)
 
-        return torch.sigmoid(x_out)
+        return x_out
 
 
     @torch.no_grad()

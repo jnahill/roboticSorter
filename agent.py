@@ -14,15 +14,15 @@ from utils import ReplayBuffer, plot_predictions, plot_curves
 class DQNAgent:
     def __init__(self,
                  env,
-                 gamma: float,
-                 learning_rate: float,
-                 buffer_size: int,
-                 batch_size: int,
-                 initial_epsilon: float,
-                 final_epsilon: float,
+                 gamma: float=0.0,
+                 learning_rate: float=1e-4,
+                 buffer_size: int=1000,
+                 batch_size: int=64,
+                 initial_epsilon: float=0.3,
+                 final_epsilon: float=0.01,
                  update_method: str='standard',
                  exploration_fraction: float=0.9,
-                 target_network_update_freq: int=1000,
+                 target_network_update_freq: int=200,
                  seed: int=0,
                  device: Union[str, torch.device]='cpu',
                 ) -> None:
@@ -256,13 +256,13 @@ if __name__ == "__main__":
                      learning_rate= 1e-4,
                      buffer_size= 1000,
                      batch_size= 64,
-                     initial_epsilon= 0.5,
+                     initial_epsilon= 0.3,
                      final_epsilon=0.01,
                      update_method='standard',
                      exploration_fraction=0.9,
                      target_network_update_freq=200,
                      seed= 1,
-                     device= 'cuda')
+                     device= 'cpu')
 
     agent.train(2000, 1000)
     #agent.save_network('2_block_2000_q_network.pt')
