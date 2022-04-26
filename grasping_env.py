@@ -1,3 +1,4 @@
+from os import truncate
 from typing import Tuple, List, Optional, Dict, Callable
 import glob
 import argparse
@@ -10,6 +11,7 @@ import time
 from tqdm import tqdm
 import h5py
 import gym
+import random
 
 class RobotArm:
     GRIPPER_CLOSED = 0.
@@ -39,7 +41,7 @@ class RobotArm:
         self.home_arm_jpos = [0., -1.1, 1.4, 1.3, 0.]
 
         self.bin_1_drop_pos = [1, -1.1, -0.75, 1.3, 0.]
-        self.bin_2_drop_pos = [0., -1.1, -0.75, 1.3, 0.]
+        self.bin_2_drop_pos = [0., -1.1, -0.2, 1.3, 0.] # TODO Change back to -0.75 when sorting
         self.bin_3_drop_pos = [-1, -1.1, -0.75, 1.3, 0.]
 
         # joint constraints are needed for four-bar linkage in xarm fingers
@@ -214,6 +216,13 @@ class RobotArm:
         success = self.monitor_movement(gripper_jpos, self.gripper_joint_ids)
         return success
 
+    def get_gripper_state(self):
+        gripper_jpos = list(zip(*pb.getJointStates(self._id, self.gripper_joint_ids)))[0]
+        gripper_state = (gripper_jpos - self.gripper_joint_limits[0]) \
+                            / (self.gripper_joint_limits[1] - self.gripper_joint_limits[0])
+        gripper_state = np.clip(np.mean(gripper_state), 0, 1)
+        return gripper_state
+
     def monitor_movement(self,
                          target_jpos: List[float],
                          joint_ids: List[int],
@@ -317,6 +326,7 @@ class TopDownGraspingEnv(gym.Env):
                  episode_length: int=1,
                  img_size: int=42,
                  render: bool=False,
+                 num_blocks: int=1,
                 ) -> None:
         '''Pybullet simulator with robot that performs top down grasps of a
         single object.  A camera is positioned to take images of workspace
@@ -344,44 +354,26 @@ class TopDownGraspingEnv(gym.Env):
                           contactStiffness=3000,
                           contactDamping=100)
 
+        self.num_blocks = num_blocks
+
         # add robot
         self.robot = RobotArm()
 
-        # add object
-        self.object_id = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        # self.object_id1 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        # self.object_id2 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        # self.object_id3 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        # self.object_id4 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
-        # self.object_id5 = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
+        # Add blocks
+        self.objects = []
+        for i in range(self.num_blocks):
+            block = pb.loadURDF("nuro_arm/assets/urdf/cube.urdf")
 
-        pb.changeDynamics(self.object_id, -1,
+            pb.changeDynamics(block, -1,
                           lateralFriction=1,
                           spinningFriction=0.005,
                           rollingFriction=0.005)
+            self.objects.append(block)
         
-        # pb.changeDynamics(self.object_id1, -1,
-        #                   lateralFriction=1,
-        #                   spinningFriction=0.005,
-        #                   rollingFriction=0.005)
-        # pb.changeDynamics(self.object_id2, -1,
-        #                   lateralFriction=1,
-        #                   spinningFriction=0.005,
-        #                   rollingFriction=0.005)
-        # pb.changeDynamics(self.object_id3, -1,
-        #                   lateralFriction=1,
-        #                   spinningFriction=0.005,
-        #                   rollingFriction=0.005)
-        # pb.changeDynamics(self.object_id4, -1,
-        #                   lateralFriction=1,
-        #                   spinningFriction=0.005,
-        #                   rollingFriction=0.005)
-        # pb.changeDynamics(self.object_id5, -1,
-        #                   lateralFriction=1,
-        #                   spinningFriction=0.005,
-        #                   rollingFriction=0.005)
+        self.blocks_left = len(self.objects)
         
         self.object_width = 0.02
+        self.grasp_height = self.object_width/2
 
         self.workspace = np.array(((0.10, -0.05), # ((min_x, min_y)
                                    (0.20, 0.05))) #  (max_x, max_y))
@@ -396,14 +388,12 @@ class TopDownGraspingEnv(gym.Env):
                                                 shape=(img_size, img_size, 3),
                                                 dtype=np.uint8)
         self.action_space = gym.spaces.Box(np.array([0,0,0]), np.array([5,img_size-1, img_size-1]), dtype=int)
-        #print(self.action_space.sample())
-        # Change shape to 3
     
     def reset(self) -> np.ndarray:
-        '''Resets environment by randomly placing object
+        '''Resets environment by randomly placing object(s)
         '''
-        self.reset_object_position()
-        # self.reset_object_texture()
+        self.reset_objects_positions()
+        self.reset_objects_colors()
         self.t_step = 0
 
         return self.get_obs()
@@ -465,14 +455,22 @@ class TopDownGraspingEnv(gym.Env):
 
         self.robot.move_gripper_to(pos, theta, teleport=True)
         self.robot.set_gripper_state(self.robot.GRIPPER_CLOSED)
-
         self.robot.move_arm_to_jpos(self.robot.home_arm_jpos)
 
-        # check if object is above plane
-        min_object_height = 0.2
-        obj_height = pb.getBasePositionAndOrientation(self.object_id)[0][2]
-        success = obj_height > min_object_height
+        if self.robot.get_gripper_state() < 0.05:
+            # gripper closed so we know its failed grasp
+            success = False
+        else:
+            success = True
+        #     self.move_to_bin(self.robot.bin_2_drop_pos)
+        #     self.blocks_left = self.blocks_left - 1
 
+        # self.robot.teleport_arm(self.robot.home_arm_jpos)
+
+        # # check if object is above plane
+        # min_object_height = 0.2
+        # obj_height = pb.getBasePositionAndOrientation(self.object_id)[0][2]
+        # success = obj_height > min_object_height
         return success
 
     def perform_object_grasp(self, x, y, theta, object) -> bool:
@@ -502,10 +500,20 @@ class TopDownGraspingEnv(gym.Env):
         self.robot.set_gripper_state(self.robot.GRIPPER_CLOSED)
         self.robot.move_arm_to_jpos(self.robot.home_arm_jpos)
 
-        # check if object is above plane
-        min_object_height = 0.05
-        obj_height = pb.getBasePositionAndOrientation(object)[0][2]
-        success = obj_height > min_object_height
+        if self.robot.get_gripper_state() < 0.05:
+            # gripper closed so we know its failed grasp
+            success = False
+        else:
+            success = True
+        #     self.move_to_bin(self.robot.bin_2_drop_pos)
+        #     self.blocks_left = self.blocks_left - 1
+
+        # self.robot.teleport_arm(self.robot.home_arm_jpos)
+
+        # # check if object is above plane
+        # min_object_height = 0.05
+        # obj_height = pb.getBasePositionAndOrientation(object)[0][2]
+        # success = obj_height > min_object_height
 
         return success
 
@@ -515,7 +523,6 @@ class TopDownGraspingEnv(gym.Env):
         self.robot.move_arm_to_jpos(bin)
         self.robot.set_gripper_state(self.robot.GRIPPER_OPENED)
         self.robot.move_arm_to_jpos(self.robot.home_arm_jpos)
-
     def sample_random_grasp(self) -> Tuple[float, float, float]:
         '''Samples random grasp (x,y,theta) located within the workspace
 
@@ -568,30 +575,34 @@ class TopDownGraspingEnv(gym.Env):
                              textureUniqueId=tex_id,
                              rgbaColor=(r,g,b,1))
 
-    def reset_given_object_position(self, object) -> None:
+    def reset_objects_positions(self) -> None:
         '''Places object randomly in workspace.  The x,y position should be
         within the workspace, and the rotation performed only about z-axis.
         The height of the object should be set such that it sits on the plane
         '''
         ws_padding = 0.01
-        x,y = np.random.uniform(self.workspace[0]+ws_padding,
-                                self.workspace[1]-ws_padding)
-        theta = np.random.uniform(-np.pi/2, np.pi/2)
+        for i in range(self.num_blocks):
+            x,y = np.random.uniform(self.workspace[0]+ws_padding,
+                                    self.workspace[1]-ws_padding)
+            theta = np.random.uniform(-np.pi/2, np.pi/2)
 
-        pos = np.array((x,y,self.object_width/2))
-        quat = pb.getQuaternionFromEuler((np.random.randint(2)*np.pi,0, theta))
-        pb.resetBasePositionAndOrientation(object, pos, quat)
+            pos = np.array((x,y,self.object_width/2))
+            quat = pb.getQuaternionFromEuler((np.random.randint(2)*np.pi,0, theta))
+            pb.resetBasePositionAndOrientation(self.objects[i], pos, quat)
 
-    def reset_given_object_texture(self, object) -> List:
+    def reset_objects_colors(self) -> List:
         '''Randomly assigns a texture to the object.  Available textures are
         located within the `nuro_arm/assets/textures` folder.
         '''
-        colors = [(0,1,0,1), (1,0,0,1), (0,0,1,1)]
-        randColor = random.choice(colors)
-        pb.changeVisualShape(object, -1, -1,
+        randColors = []
+        for i in range(self.num_blocks):
+            colors = [(0,1,0,1), (1,0,0,1), (0,0,1,1)]
+            randColor = random.choice(colors)
+            randColors.append(randColor)
+            pb.changeVisualShape(self.objects[i], -1, -1,
                              rgbaColor=randColor)
 
-        return randColor
+        return randColors
 
     def get_obs(self) -> np.ndarray:
         '''Takes picture using camera
@@ -621,7 +632,7 @@ def test_camera_placement():
         time.sleep(0.5)
 
 
-def mock_data_collection():
+def mock_data_collection(env):
     '''Use this to watch data collection, as per Section 6. You are not graded
     on this, but it may be a helpful sanity check that your grasp success
     determination is accurate.
@@ -632,49 +643,30 @@ def mock_data_collection():
     is due to a bad IK solution.  There are ways to avoid this, but for now you
     can ignore it.
     '''
-    env = TopDownGraspingEnv(True)
+    #env = TopDownGraspingEnv(True)
 
-    env_objects = [env.object_id1, env.object_id2, env.object_id3, env.object_id4, env.object_id5]
+    
     success = True
-    for i in env_objects:
-        env.reset_given_object_texture(i)
-        env.reset_given_object_position(i)
+    success_count = 0
+    env.reset()
+    objects = env.objects.copy()
 
+    for i in range(100):
+        # if (not success or env.blocks_left == 0):
+        #     env.reset()
+        #     objects = env.objects.copy()
 
-    while True:
-        if not success:
-            for j in env_objects:
-                env.reset_given_object_texture(j)
-                env.reset_given_object_position(j)
-        color = env.reset_given_object_texture(object)
-
-        img = get_obs()
-        
-        if np.random.random() > 0.5:
-            x,y,th = env.sample_expert_grasp()
-        else:
-            x,y,th = env.sample_random_grasp()
-        if (color[0] == 1):
-            colorBin = env.robot.bin_1_drop_pos
-            color = "Red"
-        elif (color[1] == 1):
-            colorBin = env.robot.bin_2_drop_pos
-            color = "Green"
-        elif (color[2] == 1):
-            colorBin = env.robot.bin_3_drop_pos
-            color = "Blue"
-
-        objects = [env.object_id1, env.object_id2, env.object_id3, env.object_id4, env.object_id5]
         randObject = random.choice(objects)
-        objects.remove(randObject)
-
         x,y,th = env.sample_expert_grasp(randObject)
+        # objects.remove(randObject)
 
         success = env.perform_object_grasp(x, y, th, randObject)
         if success:
-            env.move_to_bin(colorBin)
-        #print("Object is " + color)
-        print("SUCCESS!" if success else "failure")
+            success_count = success_count + 1
+        print(success_count)
+        env.reset()
+
+    print("Success Rate: " + str(success_count))
 
 def collect_transitions(env: TopDownGraspingEnv,
                         hdf5_file: str,
@@ -729,7 +721,7 @@ def watch_policy(env: TopDownGraspingEnv, policy: Optional[Callable]=None):
 
 
 if __name__ == "__main__":
-    env = TopDownGraspingEnv(render=True)
-    # mock_data_collection() # Used this for demos
+    env = TopDownGraspingEnv(render=False, num_blocks=5)
+    mock_data_collection(env) # Used this for demos
 
-    watch_policy(env)
+    #watch_policy(env)

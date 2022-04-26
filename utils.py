@@ -16,7 +16,7 @@ def plot_predictions(images, qmaps, actions):
         axs[0,ci].plot(py, px, 'w+', markersize=6, markeredgewidth=2)
         axs[0,ci].plot(py, px, 'r+', markersize=5)
 
-        axs[1,ci].imshow(qmaps[ci,0].cpu())
+        axs[1,ci].imshow(qmaps[ci, actions[ci,0]].cpu())
 
     axs[0,0].text(-8, 30, 'Images', rotation='vertical')
     axs[1,0].text(-8, 30, 'Qmaps', rotation='vertical')
@@ -35,6 +35,11 @@ def plot_curves(rewards, success, loss):
     axs[0].set_ylabel('episodic rewards')
 
     axs[1].plot(np.convolve(success, np.ones(W)/W, 'valid'))
+    #axs[1].axhline(y=1, color='r', linestyle='dashed')
+    #axs[1].axhline(y=.97, color='r', linestyle='dashed')
+    #axs[1].axhline(y=.95, color='r', linestyle='dashed')
+    #axs[1].axhline(y=.93, color='r', linestyle='dashed')
+    #axs[1].axhline(y=.86, color='r', linestyle='dashed')
     axs[1].set_xlabel('episodes')
     axs[1].set_ylabel('success rate')
     axs[1].set_ylim(0, 1)
